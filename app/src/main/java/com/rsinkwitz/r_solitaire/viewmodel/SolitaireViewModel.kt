@@ -47,6 +47,10 @@ class SolitaireViewModel(application: Application) : AndroidViewModel(applicatio
     // Zug-Historie für Undo
     private val moveHistory = mutableListOf<Move>()
 
+    // State für Anzahl der Züge (für automatische UI-Updates)
+    var moveHistorySize = mutableStateOf(0)
+        private set
+
     // Replay-Status
     var replayState = mutableStateOf<ReplayState?>(null)
         private set
@@ -83,6 +87,7 @@ class SolitaireViewModel(application: Application) : AndroidViewModel(applicatio
     fun setupBoard() {
         board.value = createBoard()
         moveHistory.clear()
+        moveHistorySize.value = 0
         isBeforeFirst.value = true
         selectedHole = null
         lastSelectedHole = null
@@ -153,6 +158,7 @@ class SolitaireViewModel(application: Application) : AndroidViewModel(applicatio
 
                 // Speichere Zug für Undo
                 moveHistory.add(Move(from.row, from.col, to.row, to.col))
+                moveHistorySize.value = moveHistory.size
 
                 // Trigger Recomposition
                 board.value = board.value.toMutableStateList()
@@ -174,6 +180,8 @@ class SolitaireViewModel(application: Application) : AndroidViewModel(applicatio
         if (moveHistory.isEmpty()) return
 
         val move = moveHistory.removeAt(moveHistory.size - 1)
+        moveHistorySize.value = moveHistory.size
+
         val from = board.value.getOrNull(move.fromRow)?.getOrNull(move.fromCol)
         val to = board.value.getOrNull(move.toRow)?.getOrNull(move.toCol)
         val overRow = (move.fromRow + move.toRow) / 2
@@ -241,8 +249,13 @@ class SolitaireViewModel(application: Application) : AndroidViewModel(applicatio
         board.value = createBoard()
         isBeforeFirst.value = false
         moveHistory.clear()
+        moveHistorySize.value = 0
         selectedHole = null
         lastSelectedHole = null
+
+        // Initial entfernten Stöpsel merken
+        initialHoleRow = savedGame.initialHoleRow
+        initialHoleCol = savedGame.initialHoleCol
 
         // Initial Loch entfernen
         val initialHole = board.value.getOrNull(savedGame.initialHoleRow)
@@ -275,9 +288,9 @@ class SolitaireViewModel(application: Application) : AndroidViewModel(applicatio
                 if (!currentState.isPlaying) break
 
                 if (currentState.currentMoveIndex >= currentState.savedGame.moves.size) {
-                    // Replay beendet
+                    // Replay beendet - automatisch in "Weiterspielen"-Modus wechseln
                     delay(1000) // Kurze Pause am Ende
-                    replayState.value = currentState.copy(isPlaying = false)
+                    continueFromReplay()
                     break
                 }
 
@@ -319,6 +332,11 @@ class SolitaireViewModel(application: Application) : AndroidViewModel(applicatio
             from.hasPeg = false
             over.hasPeg = false
             to.hasPeg = true
+
+            // Zug zur Historie hinzufügen (für continueFromReplay)
+            moveHistory.add(move)
+            moveHistorySize.value = moveHistory.size
+
             board.value = board.value.toMutableStateList()
         }
     }
@@ -363,6 +381,7 @@ class SolitaireViewModel(application: Application) : AndroidViewModel(applicatio
         moveHistory.addAll(
             state.savedGame.moves.take(state.currentMoveIndex)
         )
+        moveHistorySize.value = moveHistory.size
 
         initialHoleRow = state.savedGame.initialHoleRow
         initialHoleCol = state.savedGame.initialHoleCol

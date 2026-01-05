@@ -95,9 +95,14 @@ fun SolitaireScreen(
                         IconButton(onClick = { viewModel.restart() }) {
                             Icon(Icons.Default.Refresh, contentDescription = "Neustart")
                         }
+
+                        // Save-Button - enabled basiert auf moveHistorySize State
+                        val canSave = !viewModel.isBeforeFirst.value &&
+                                     viewModel.moveHistorySize.value > 0 &&
+                                     !viewModel.isInReplayMode
                         IconButton(
                             onClick = { showSaveDialog = true },
-                            enabled = viewModel.canSaveGame()
+                            enabled = canSave
                         ) {
                             Icon(Icons.Default.Save, contentDescription = "Speichern")
                         }
