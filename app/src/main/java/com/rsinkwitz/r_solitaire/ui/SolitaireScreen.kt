@@ -2,6 +2,7 @@ package com.rsinkwitz.r_solitaire.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -35,6 +36,7 @@ fun SolitaireScreen(
     val savedGames by viewModel.getSavedGames().collectAsState(initial = emptyList())
     val replayState = viewModel.replayState.value
     val isInReplayMode = viewModel.isInReplayMode
+    val hasWon = viewModel.hasWon.value
 
     Scaffold(
         topBar = {
@@ -193,10 +195,12 @@ fun SolitaireScreen(
                     .padding(16.dp)
             )
 
-            // Copyright
+            // Copyright (klickbar für Sound-Test)
             Text(
                 text = "© 2025 By Rainer",
-                modifier = Modifier.padding(bottom = 16.dp),
+                modifier = Modifier
+                    .padding(bottom = 16.dp)
+                    .clickable { viewModel.testCongratulationsSound() },
                 style = MaterialTheme.typography.bodySmall,
                 color = Color.Gray,
                 textAlign = TextAlign.Center
@@ -258,6 +262,13 @@ fun SolitaireScreen(
             }
         )
     }
+
+    // Gratulations-Dialog bei Gewinn
+    if (hasWon) {
+        CongratulationsDialog(
+            onDismiss = { viewModel.dismissWinDialog() }
+        )
+    }
 }
 
 @Composable
@@ -292,6 +303,7 @@ fun SolitaireBoard(
                 val pegInset = 4.dp.toPx()
                 val currentBoard = viewModel.board.value
 
+                // Zuerst alle Löcher und statischen Pegs zeichnen
                 for (row in 0..6) {
                     for (col in 0..6) {
                         val hole = currentBoard.getOrNull(row)?.getOrNull(col)
@@ -304,9 +316,9 @@ fun SolitaireBoard(
                             )
                             val radius = (cellSizePx - 2 * pegInset) / 2
 
-                            // Prüfe ob dieser Peg gerade animiert wird (während Replay)
-                            val isAnimating = replayState?.animatingPegRow == row &&
-                                            replayState?.animatingPegCol == col
+                            // Ist dies der Startpunkt der Animation? Dann nicht zeichnen (wird separat animiert)
+                            val isAnimationStart = replayState?.animatingPegFromRow == row &&
+                                                   replayState?.animatingPegFromCol == col
 
                             when {
                                 !hole.hasPeg -> {
@@ -318,12 +330,13 @@ fun SolitaireBoard(
                                         style = Stroke(width = 2.dp.toPx())
                                     )
                                 }
-                                isAnimating -> {
-                                    // Animierender Peg während Replay (rot gefüllt)
+                                isAnimationStart -> {
+                                    // Wird separat als animierender Peg gezeichnet - hier nur leeres Loch zeichnen
                                     drawCircle(
-                                        color = Color.Red,
+                                        color = Color.Blue,
                                         radius = radius,
-                                        center = center
+                                        center = center,
+                                        style = Stroke(width = 2.dp.toPx())
                                     )
                                 }
                                 hole.isSelected -> {
@@ -345,6 +358,34 @@ fun SolitaireBoard(
                             }
                         }
                     }
+                }
+
+                // Animierter roter Peg separat zeichnen (über allen anderen)
+                if (replayState != null &&
+                    replayState.animatingPegFromRow != null &&
+                    replayState.animatingPegFromCol != null &&
+                    replayState.animatingPegToRow != null &&
+                    replayState.animatingPegToCol != null) {
+
+                    // Start- und Ziel-Position berechnen
+                    val fromX = replayState.animatingPegFromCol * cellSizePx + cellSizePx / 2
+                    val fromY = replayState.animatingPegFromRow * cellSizePx + cellSizePx / 2
+                    val toX = replayState.animatingPegToCol * cellSizePx + cellSizePx / 2
+                    val toY = replayState.animatingPegToRow * cellSizePx + cellSizePx / 2
+
+                    // Lineare Interpolation basierend auf animationProgress
+                    val currentX = fromX + (toX - fromX) * replayState.animationProgress
+                    val currentY = fromY + (toY - fromY) * replayState.animationProgress
+
+                    val animCenter = Offset(currentX, currentY)
+                    val radius = (cellSizePx - 2 * pegInset) / 2
+
+                    // Roter animierter Peg
+                    drawCircle(
+                        color = Color.Red,
+                        radius = radius,
+                        center = animCenter
+                    )
                 }
             }
         }

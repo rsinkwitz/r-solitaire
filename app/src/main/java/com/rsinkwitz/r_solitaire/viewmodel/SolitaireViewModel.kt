@@ -13,6 +13,7 @@ import com.rsinkwitz.r_solitaire.model.Move
 import com.rsinkwitz.r_solitaire.model.ReplaySpeed
 import com.rsinkwitz.r_solitaire.model.ReplayState
 import com.rsinkwitz.r_solitaire.model.SavedGame
+import com.rsinkwitz.r_solitaire.util.SoundPlayer
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -24,9 +25,13 @@ class SolitaireViewModel(application: Application) : AndroidViewModel(applicatio
     // Repository für gespeicherte Spiele
     private val repository: SavedGameRepository
 
+    // Sound Player für Gratulations-Sound
+    private val soundPlayer: SoundPlayer
+
     init {
         val database = SavedGameDatabase.getDatabase(application)
         repository = SavedGameRepository(database.savedGameDao())
+        soundPlayer = SoundPlayer(application)
     }
 
     // 7x7 Board mit Kreuzform
@@ -35,6 +40,10 @@ class SolitaireViewModel(application: Application) : AndroidViewModel(applicatio
 
     // Spielzustand
     var isBeforeFirst = mutableStateOf(true)
+        private set
+
+    // Gewinn-Status
+    var hasWon = mutableStateOf(false)
         private set
 
     // Initial entfernter Stöpsel (für Save-Funktion)
@@ -89,6 +98,7 @@ class SolitaireViewModel(application: Application) : AndroidViewModel(applicatio
         moveHistory.clear()
         moveHistorySize.value = 0
         isBeforeFirst.value = true
+        hasWon.value = false
         selectedHole = null
         lastSelectedHole = null
         initialHoleRow = -1
@@ -162,6 +172,9 @@ class SolitaireViewModel(application: Application) : AndroidViewModel(applicatio
 
                 // Trigger Recomposition
                 board.value = board.value.toMutableStateList()
+
+                // Prüfe Gewinn-Bedingung
+                checkWinCondition()
             }
         }
 
@@ -208,6 +221,26 @@ class SolitaireViewModel(application: Application) : AndroidViewModel(applicatio
         return board.value.sumOf { row ->
             row.count { hole -> hole?.hasPeg == true }
         }
+    }
+
+    private fun checkWinCondition() {
+        // Gewonnen wenn: 1 Peg übrig UND dieser im initialen Startloch
+        if (getRemainingPegs() == 1 && !isBeforeFirst.value && initialHoleRow >= 0) {
+            val initialHole = board.value.getOrNull(initialHoleRow)?.getOrNull(initialHoleCol)
+            if (initialHole?.hasPeg == true && !hasWon.value) {
+                hasWon.value = true
+                // Gratulations-Sound abspielen
+                soundPlayer.playCongratulationsSound()
+            }
+        }
+    }
+
+    fun dismissWinDialog() {
+        hasWon.value = false
+    }
+
+    fun testCongratulationsSound() {
+        soundPlayer.playCongratulationsSound()
     }
 
     // ========== Save/Load Funktionen ==========
@@ -296,26 +329,42 @@ class SolitaireViewModel(application: Application) : AndroidViewModel(applicatio
 
                 val move = currentState.savedGame.moves[currentState.currentMoveIndex]
 
-                // Peg als "animierend" markieren (wird rot)
+                // === PHASE 1: Peg wird rot und steht still ===
                 replayState.value = currentState.copy(
-                    animatingPegRow = move.fromRow,
-                    animatingPegCol = move.fromCol
+                    animatingPegFromRow = move.fromRow,
+                    animatingPegFromCol = move.fromCol,
+                    animatingPegToRow = move.toRow,
+                    animatingPegToCol = move.toCol,
+                    animationProgress = 0f
                 )
+                delay(currentState.speed.delayMs / 4)  // 25% - Stillstand am Start
 
-                // Halbe Verzögerung für Animation
-                delay(currentState.speed.delayMs / 2)
+                // === PHASE 2: Flüssige Bewegung zum Ziel ===
+                val animationSteps = 20  // Anzahl der Animations-Frames
+                val stepDelay = (currentState.speed.delayMs / 2) / animationSteps
 
-                // Zug ausführen
+                for (step in 1..animationSteps) {
+                    val progress = step.toFloat() / animationSteps
+                    replayState.value = replayState.value?.copy(
+                        animationProgress = progress
+                    )
+                    delay(stepDelay)
+                }
+
+                // === PHASE 3: Stillstand am Ziel (noch rot) ===
+                delay(currentState.speed.delayMs / 4)  // 25% - Stillstand am Ende
+
+                // === PHASE 4: Zug ausführen und zurück zu blau ===
                 executeReplayMove(move)
-
-                // Restliche Verzögerung
-                delay(currentState.speed.delayMs / 2)
 
                 // Animation beenden
                 replayState.value = replayState.value?.copy(
                     currentMoveIndex = currentState.currentMoveIndex + 1,
-                    animatingPegRow = null,
-                    animatingPegCol = null
+                    animatingPegFromRow = null,
+                    animatingPegFromCol = null,
+                    animatingPegToRow = null,
+                    animatingPegToCol = null,
+                    animationProgress = 0f
                 )
             }
         }
@@ -338,6 +387,9 @@ class SolitaireViewModel(application: Application) : AndroidViewModel(applicatio
             moveHistorySize.value = moveHistory.size
 
             board.value = board.value.toMutableStateList()
+
+            // Prüfe Gewinn-Bedingung auch während Replay
+            checkWinCondition()
         }
     }
 
@@ -345,8 +397,11 @@ class SolitaireViewModel(application: Application) : AndroidViewModel(applicatio
         replayJob?.cancel()
         replayState.value = replayState.value?.copy(
             isPlaying = false,
-            animatingPegRow = null,
-            animatingPegCol = null
+            animatingPegFromRow = null,
+            animatingPegFromCol = null,
+            animatingPegToRow = null,
+            animatingPegToCol = null,
+            animationProgress = 0f
         )
     }
 
