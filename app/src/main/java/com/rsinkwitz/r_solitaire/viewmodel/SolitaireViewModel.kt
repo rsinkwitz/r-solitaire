@@ -1,13 +1,33 @@
 package com.rsinkwitz.r_solitaire.viewmodel
 
+import android.app.Application
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.runtime.toMutableStateList
-import androidx.lifecycle.ViewModel
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.rsinkwitz.r_solitaire.data.SavedGameDatabase
+import com.rsinkwitz.r_solitaire.data.SavedGameRepository
 import com.rsinkwitz.r_solitaire.model.Hole
 import com.rsinkwitz.r_solitaire.model.Move
+import com.rsinkwitz.r_solitaire.model.ReplaySpeed
+import com.rsinkwitz.r_solitaire.model.ReplayState
+import com.rsinkwitz.r_solitaire.model.SavedGame
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.launch
+import java.util.UUID
 
-class SolitaireViewModel : ViewModel() {
+class SolitaireViewModel(application: Application) : AndroidViewModel(application) {
+
+    // Repository für gespeicherte Spiele
+    private val repository: SavedGameRepository
+
+    init {
+        val database = SavedGameDatabase.getDatabase(application)
+        repository = SavedGameRepository(database.savedGameDao())
+    }
 
     // 7x7 Board mit Kreuzform
     var board = mutableStateOf<SnapshotStateList<List<Hole?>>>(createBoard())
@@ -17,11 +37,24 @@ class SolitaireViewModel : ViewModel() {
     var isBeforeFirst = mutableStateOf(true)
         private set
 
+    // Initial entfernter Stöpsel (für Save-Funktion)
+    private var initialHoleRow: Int = -1
+    private var initialHoleCol: Int = -1
+
     private var selectedHole: Hole? = null
     private var lastSelectedHole: Hole? = null
 
     // Zug-Historie für Undo
     private val moveHistory = mutableListOf<Move>()
+
+    // Replay-Status
+    var replayState = mutableStateOf<ReplayState?>(null)
+        private set
+
+    private var replayJob: Job? = null
+
+    val isInReplayMode: Boolean
+        get() = replayState.value != null
 
     private fun createBoard(): SnapshotStateList<List<Hole?>> {
         val boardList = mutableListOf<List<Hole?>>()
@@ -53,15 +86,24 @@ class SolitaireViewModel : ViewModel() {
         isBeforeFirst.value = true
         selectedHole = null
         lastSelectedHole = null
+        initialHoleRow = -1
+        initialHoleCol = -1
+        replayState.value = null
+        replayJob?.cancel()
     }
 
     fun onHoleClick(row: Int, col: Int) {
+        // Im Replay-Modus sind keine Klicks erlaubt
+        if (isInReplayMode) return
+
         val hole = board.value.getOrNull(row)?.getOrNull(col) ?: return
 
         // Vor dem ersten Zug: Startstöpsel entfernen
         if (isBeforeFirst.value) {
             hole.hasPeg = false
             isBeforeFirst.value = false
+            initialHoleRow = row
+            initialHoleCol = col
             board.value = board.value.toMutableStateList() // Trigger Recomposition
             return
         }
@@ -158,6 +200,175 @@ class SolitaireViewModel : ViewModel() {
         return board.value.sumOf { row ->
             row.count { hole -> hole?.hasPeg == true }
         }
+    }
+
+    // ========== Save/Load Funktionen ==========
+
+    fun canSaveGame(): Boolean {
+        return !isBeforeFirst.value && moveHistory.isNotEmpty() && !isInReplayMode
+    }
+
+    fun saveGame(title: String) {
+        if (!canSaveGame()) return
+
+        viewModelScope.launch {
+            val savedGame = SavedGame(
+                id = UUID.randomUUID().toString(),
+                title = title.trim(),
+                timestamp = System.currentTimeMillis(),
+                initialHoleRow = initialHoleRow,
+                initialHoleCol = initialHoleCol,
+                moves = moveHistory.toList()
+            )
+            repository.insertGame(savedGame)
+        }
+    }
+
+    fun getSavedGames(): Flow<List<SavedGame>> {
+        return repository.getAllGames()
+    }
+
+    fun deleteSavedGame(savedGame: SavedGame) {
+        viewModelScope.launch {
+            repository.deleteGame(savedGame)
+        }
+    }
+
+    // ========== Replay-Funktionen ==========
+
+    fun startReplay(savedGame: SavedGame) {
+        // Brett zurücksetzen
+        board.value = createBoard()
+        isBeforeFirst.value = false
+        moveHistory.clear()
+        selectedHole = null
+        lastSelectedHole = null
+
+        // Initial Loch entfernen
+        val initialHole = board.value.getOrNull(savedGame.initialHoleRow)
+            ?.getOrNull(savedGame.initialHoleCol)
+        initialHole?.hasPeg = false
+        board.value = board.value.toMutableStateList()
+
+        // Replay-Status setzen
+        replayState.value = ReplayState(
+            savedGame = savedGame,
+            currentMoveIndex = 0,
+            isPlaying = true,
+            speed = ReplaySpeed.NORMAL
+        )
+
+        // Replay starten
+        startReplayLoop()
+    }
+
+    private fun startReplayLoop() {
+        replayJob?.cancel()
+
+        val state = replayState.value ?: return
+        if (!state.isPlaying) return
+
+        replayJob = viewModelScope.launch {
+            while (replayState.value != null) {
+                val currentState = replayState.value ?: break
+
+                if (!currentState.isPlaying) break
+
+                if (currentState.currentMoveIndex >= currentState.savedGame.moves.size) {
+                    // Replay beendet
+                    delay(1000) // Kurze Pause am Ende
+                    replayState.value = currentState.copy(isPlaying = false)
+                    break
+                }
+
+                val move = currentState.savedGame.moves[currentState.currentMoveIndex]
+
+                // Peg als "animierend" markieren (wird rot)
+                replayState.value = currentState.copy(
+                    animatingPegRow = move.fromRow,
+                    animatingPegCol = move.fromCol
+                )
+
+                // Halbe Verzögerung für Animation
+                delay(currentState.speed.delayMs / 2)
+
+                // Zug ausführen
+                executeReplayMove(move)
+
+                // Restliche Verzögerung
+                delay(currentState.speed.delayMs / 2)
+
+                // Animation beenden
+                replayState.value = replayState.value?.copy(
+                    currentMoveIndex = currentState.currentMoveIndex + 1,
+                    animatingPegRow = null,
+                    animatingPegCol = null
+                )
+            }
+        }
+    }
+
+    private fun executeReplayMove(move: Move) {
+        val from = board.value.getOrNull(move.fromRow)?.getOrNull(move.fromCol)
+        val to = board.value.getOrNull(move.toRow)?.getOrNull(move.toCol)
+        val overRow = (move.fromRow + move.toRow) / 2
+        val overCol = (move.fromCol + move.toCol) / 2
+        val over = board.value.getOrNull(overRow)?.getOrNull(overCol)
+
+        if (from != null && to != null && over != null) {
+            from.hasPeg = false
+            over.hasPeg = false
+            to.hasPeg = true
+            board.value = board.value.toMutableStateList()
+        }
+    }
+
+    fun pauseReplay() {
+        replayJob?.cancel()
+        replayState.value = replayState.value?.copy(
+            isPlaying = false,
+            animatingPegRow = null,
+            animatingPegCol = null
+        )
+    }
+
+    fun resumeReplay() {
+        replayState.value = replayState.value?.copy(isPlaying = true)
+        startReplayLoop()
+    }
+
+    fun stopReplay() {
+        replayJob?.cancel()
+        replayState.value = null
+    }
+
+    fun setReplaySpeed(speed: ReplaySpeed) {
+        val currentState = replayState.value ?: return
+        val wasPlaying = currentState.isPlaying
+
+        replayState.value = currentState.copy(speed = speed)
+
+        if (wasPlaying) {
+            pauseReplay()
+            resumeReplay()
+        }
+    }
+
+    fun continueFromReplay() {
+        // Aktuellen Stand als Ausgangspunkt für neues Spiel übernehmen
+        val state = replayState.value ?: return
+
+        // Moves bis zum aktuellen Index übernehmen
+        moveHistory.clear()
+        moveHistory.addAll(
+            state.savedGame.moves.take(state.currentMoveIndex)
+        )
+
+        initialHoleRow = state.savedGame.initialHoleRow
+        initialHoleCol = state.savedGame.initialHoleCol
+
+        replayJob?.cancel()
+        replayState.value = null
     }
 }
 
