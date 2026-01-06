@@ -10,7 +10,7 @@ import java.util.*
 
 @Composable
 fun SaveGameDialog(
-    moveCount: Int,
+    remainingPegs: Int,
     onDismiss: () -> Unit,
     onSave: (String) -> Unit
 ) {
@@ -44,7 +44,7 @@ fun SaveGameDialog(
                 )
 
                 Text(
-                    text = "Züge: $moveCount",
+                    text = "Verbleibende Stöpsel: $remainingPegs",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

@@ -43,6 +43,18 @@ fun SolitaireScreen(
     // Coroutine scope for async operations
     val coroutineScope = rememberCoroutineScope()
 
+    // State für verfügbare Export-Dateien (wird nach jedem Export aktualisiert)
+    var availableYamlFiles by remember { mutableStateOf<List<String>>(emptyList()) }
+    var availableDbFiles by remember { mutableStateOf<List<String>>(emptyList()) }
+
+    // Lade verfügbare Dateien beim Öffnen des Dialogs
+    LaunchedEffect(showLoadDialog) {
+        if (showLoadDialog) {
+            availableYamlFiles = viewModel.getAvailableYamlFiles()
+            availableDbFiles = viewModel.getAvailableDbFiles()
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -216,7 +228,7 @@ fun SolitaireScreen(
     // Dialogs
     if (showSaveDialog) {
         SaveGameDialog(
-            moveCount = viewModel.getRemainingPegs(),
+            remainingPegs = viewModel.getRemainingPegs(),
             onDismiss = { showSaveDialog = false },
             onSave = { title ->
                 viewModel.saveGame(title)
@@ -240,6 +252,8 @@ fun SolitaireScreen(
                 coroutineScope.launch {
                     val result = viewModel.exportGamesToYaml()
                     saveSuccessMessage = result
+                    // Liste der verfügbaren YAML-Dateien aktualisieren
+                    availableYamlFiles = viewModel.getAvailableYamlFiles()
                 }
             },
             onImportYaml = { filename ->
@@ -251,13 +265,13 @@ fun SolitaireScreen(
             onExportDb = {
                 val result = viewModel.exportDatabaseToDownloads()
                 saveSuccessMessage = result
+                // Liste der verfügbaren DB-Dateien aktualisieren
+                availableDbFiles = viewModel.getAvailableDbFiles()
             },
             onImportDb = { filename ->
                 coroutineScope.launch {
                     val result = viewModel.importDatabaseFromDownloads(filename)
                     saveSuccessMessage = result
-                    // Dialog schließen da DB ersetzt wird
-                    showLoadDialog = false
                 }
             },
             onDeleteAll = {
@@ -266,8 +280,8 @@ fun SolitaireScreen(
                     saveSuccessMessage = result
                 }
             },
-            availableYamlFiles = viewModel.getAvailableYamlFiles(),
-            availableDbFiles = viewModel.getAvailableDbFiles()
+            availableYamlFiles = availableYamlFiles,
+            availableDbFiles = availableDbFiles
         )
     }
 

@@ -461,6 +461,14 @@ class SolitaireViewModel(application: Application) : AndroidViewModel(applicatio
                 return "Fehler: Datenbank nicht gefunden bei: ${dbFile.absolutePath}"
             }
 
+            // WAL Checkpoint durchführen um .db-shm und .db-wal Dateien zu konsolidieren
+            try {
+                val db = SavedGameDatabase.getDatabase(context)
+                db.openHelper.writableDatabase.execSQL("PRAGMA wal_checkpoint(FULL)")
+            } catch (e: Exception) {
+                // Ignorieren wenn Checkpoint fehlschlägt
+            }
+
             // Export direkt in öffentlichen Download-Ordner mit Datum/Zeit
             val timestamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())
             val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(
@@ -473,8 +481,14 @@ class SolitaireViewModel(application: Application) : AndroidViewModel(applicatio
 
             val exportFile = java.io.File(downloadsDir, "r_solitaire_backup_${timestamp}.db")
 
-            // Kopiere Datenbank
+            // Kopiere nur die Haupt-DB-Datei
             dbFile.copyTo(exportFile, overwrite = true)
+
+            // Lösche eventuelle .db-shm und .db-wal Dateien im Download-Ordner
+            val shmFile = java.io.File(downloadsDir, "r_solitaire_backup_${timestamp}.db-shm")
+            val walFile = java.io.File(downloadsDir, "r_solitaire_backup_${timestamp}.db-wal")
+            if (shmFile.exists()) shmFile.delete()
+            if (walFile.exists()) walFile.delete()
 
             if (exportFile.exists() && exportFile.length() > 0) {
                 "✓ DB exportiert nach Download-Ordner: ${exportFile.name}"
@@ -557,7 +571,7 @@ class SolitaireViewModel(application: Application) : AndroidViewModel(applicatio
                     repository.saveGame(game)
                 }
 
-                "DB Import erfolgreich!\n\n${importedGames.size} Spiel(e) importiert\n\nDatei:\n${importFile.name}\n\nSchließen Sie den Dialog, um die Liste zu aktualisieren."
+                "✓ ${importedGames.size} Spiel(e) aus DB importiert: ${importFile.name}"
             }
         } catch (e: Exception) {
             e.printStackTrace()
