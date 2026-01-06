@@ -36,6 +36,16 @@ class SavedGameRepository(private val dao: SavedGameDao) {
         return dao.getGameById(gameId)?.toSavedGame()
     }
 
+    // Synchrone Methode für YAML-Export (nicht auf Main-Thread aufrufen!)
+    fun getAllGamesSync(): List<SavedGame> {
+        return dao.getAllGamesSync().map { entity -> entity.toSavedGame() }
+    }
+
+    // Speichere einzelnes Spiel (für YAML-Import)
+    suspend fun saveGame(savedGame: SavedGame) {
+        dao.insertGame(savedGame.toEntity())
+    }
+
     private fun SavedGameEntity.toSavedGame(): SavedGame {
         val movesData = Json.decodeFromString<List<MoveData>>(movesJson)
         val moves = movesData.map {

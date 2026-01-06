@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.rsinkwitz.r_solitaire.model.ReplaySpeed
 import com.rsinkwitz.r_solitaire.viewmodel.SolitaireViewModel
+import kotlinx.coroutines.launch
 import kotlin.math.min
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -31,12 +32,16 @@ fun SolitaireScreen(
     var showSaveDialog by remember { mutableStateOf(false) }
     var showLoadDialog by remember { mutableStateOf(false) }
     var showStopReplayDialog by remember { mutableStateOf(false) }
+    var showRestartDialog by remember { mutableStateOf(false) }
     var saveSuccessMessage by remember { mutableStateOf<String?>(null) }
 
     val savedGames by viewModel.getSavedGames().collectAsState(initial = emptyList())
     val replayState = viewModel.replayState.value
     val isInReplayMode = viewModel.isInReplayMode
     val hasWon = viewModel.hasWon.value
+
+    // Coroutine scope for async operations
+    val coroutineScope = rememberCoroutineScope()
 
     Scaffold(
         topBar = {
@@ -94,8 +99,8 @@ fun SolitaireScreen(
                         IconButton(onClick = { viewModel.undoMove() }) {
                             Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = "Zurück")
                         }
-                        IconButton(onClick = { viewModel.restart() }) {
-                            Icon(Icons.Default.Refresh, contentDescription = "Neustart")
+                        IconButton(onClick = { showRestartDialog = true }) {
+                            Icon(Icons.Default.RestartAlt, contentDescription = "Neustart")
                         }
 
                         // Save-Button - enabled basiert auf moveHistorySize State
@@ -230,7 +235,39 @@ fun SolitaireScreen(
             },
             onDelete = { game ->
                 viewModel.deleteSavedGame(game)
-            }
+            },
+            onExportYaml = {
+                coroutineScope.launch {
+                    val result = viewModel.exportGamesToYaml()
+                    saveSuccessMessage = result
+                }
+            },
+            onImportYaml = { filename ->
+                coroutineScope.launch {
+                    val result = viewModel.importGamesFromYaml(filename)
+                    saveSuccessMessage = result
+                }
+            },
+            onExportDb = {
+                val result = viewModel.exportDatabaseToDownloads()
+                saveSuccessMessage = result
+            },
+            onImportDb = { filename ->
+                coroutineScope.launch {
+                    val result = viewModel.importDatabaseFromDownloads(filename)
+                    saveSuccessMessage = result
+                    // Dialog schließen da DB ersetzt wird
+                    showLoadDialog = false
+                }
+            },
+            onDeleteAll = {
+                coroutineScope.launch {
+                    val result = viewModel.deleteAllGames()
+                    saveSuccessMessage = result
+                }
+            },
+            availableYamlFiles = viewModel.getAvailableYamlFiles(),
+            availableDbFiles = viewModel.getAvailableDbFiles()
         )
     }
 
@@ -258,6 +295,30 @@ fun SolitaireScreen(
                     }
                 ) {
                     Text("Verwerfen")
+                }
+            }
+        )
+    }
+
+    // Neustart-Bestätigungsdialog
+    if (showRestartDialog) {
+        AlertDialog(
+            onDismissRequest = { showRestartDialog = false },
+            title = { Text("Neustart bestätigen") },
+            text = { Text("Möchten Sie wirklich neu starten? Das aktuelle Spiel geht verloren.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.restart()
+                        showRestartDialog = false
+                    }
+                ) {
+                    Text("Neustart")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRestartDialog = false }) {
+                    Text("Abbrechen")
                 }
             }
         )
@@ -320,11 +381,14 @@ fun SolitaireBoard(
                             val isAnimationStart = replayState?.animatingPegFromRow == row &&
                                                    replayState?.animatingPegFromCol == col
 
+                            // Ist dies das Start-Loch? Dann grüner Rand
+                            val isInitialHole = viewModel.isInitialHole(row, col)
+
                             when {
                                 !hole.hasPeg -> {
-                                    // Leeres Loch (blauer Ring)
+                                    // Leeres Loch (grüner Ring für Start-Loch, sonst blau)
                                     drawCircle(
-                                        color = Color.Blue,
+                                        color = if (isInitialHole) Color.Green else Color.Blue,
                                         radius = radius,
                                         center = center,
                                         style = Stroke(width = 2.dp.toPx())
@@ -333,7 +397,7 @@ fun SolitaireBoard(
                                 isAnimationStart -> {
                                     // Wird separat als animierender Peg gezeichnet - hier nur leeres Loch zeichnen
                                     drawCircle(
-                                        color = Color.Blue,
+                                        color = if (isInitialHole) Color.Green else Color.Blue,
                                         radius = radius,
                                         center = center,
                                         style = Stroke(width = 2.dp.toPx())

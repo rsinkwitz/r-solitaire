@@ -11,6 +11,9 @@ interface SavedGameDao {
     @Query("SELECT * FROM saved_games ORDER BY timestamp DESC")
     fun getAllGames(): Flow<List<SavedGameEntity>>
 
+    @Query("SELECT * FROM saved_games ORDER BY timestamp DESC")
+    fun getAllGamesSync(): List<SavedGameEntity>
+
     @Insert
     suspend fun insertGame(game: SavedGameEntity)
 

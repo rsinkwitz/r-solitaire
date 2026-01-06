@@ -16,8 +16,8 @@ android {
         applicationId = "com.rsinkwitz.r_solitaire"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 8
+        versionName = "1.7"
 
         // APK-Dateiname anpassen
         setProperty("archivesBaseName", "r-solitaire")
