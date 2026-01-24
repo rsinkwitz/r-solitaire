@@ -501,26 +501,127 @@ class SolitaireViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    suspend fun importDatabaseFromUri(uri: android.net.Uri): String = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        try {
+            val context = getApplication<Application>()
+
+            android.util.Log.d("SolitaireVM", "DB Import via URI: ${uri.path}")
+
+            // Zuerst alle existierenden Spiele löschen (über Repository, damit Room's Tracker funktioniert)
+            val existingGames = repository.getAllGamesSync()
+            for (game in existingGames) {
+                repository.deleteGame(game)
+            }
+
+            // Temporäre Datei erstellen und DB-Inhalt kopieren
+            val tempFile = java.io.File(context.cacheDir, "temp_import.db")
+
+            context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                tempFile.outputStream().use { outputStream ->
+                    inputStream.copyTo(outputStream)
+                }
+            }
+
+            if (!tempFile.exists() || tempFile.length() == 0L) {
+                return@withContext "Fehler: Konnte DB-Datei nicht in Temp-Datei kopieren"
+            }
+
+            android.util.Log.d("SolitaireVM", "DB Import: Temp-Datei erstellt: ${tempFile.length()} bytes")
+
+            // Temporär die importierte DB öffnen und Spiele extrahieren
+            val importedGames = mutableListOf<SavedGame>()
+
+            try {
+                val sqliteDb = android.database.sqlite.SQLiteDatabase.openDatabase(
+                    tempFile.absolutePath,
+                    null,
+                    android.database.sqlite.SQLiteDatabase.OPEN_READONLY
+                )
+
+                val dbCursor = sqliteDb.rawQuery("SELECT * FROM saved_games ORDER BY timestamp DESC", null)
+
+                while (dbCursor.moveToNext()) {
+                    val id = dbCursor.getString(dbCursor.getColumnIndexOrThrow("id"))
+                    val title = dbCursor.getString(dbCursor.getColumnIndexOrThrow("title"))
+                    val timestamp = dbCursor.getLong(dbCursor.getColumnIndexOrThrow("timestamp"))
+                    val initialHoleRow = dbCursor.getInt(dbCursor.getColumnIndexOrThrow("initialHoleRow"))
+                    val initialHoleCol = dbCursor.getInt(dbCursor.getColumnIndexOrThrow("initialHoleCol"))
+                    val movesJson = dbCursor.getString(dbCursor.getColumnIndexOrThrow("movesJson"))
+
+                    // Parse moves
+                    val movesData = kotlinx.serialization.json.Json.decodeFromString<List<com.rsinkwitz.r_solitaire.data.MoveData>>(movesJson)
+                    val moves = movesData.map { com.rsinkwitz.r_solitaire.model.Move(it.fromRow, it.fromCol, it.toRow, it.toCol) }
+
+                    importedGames.add(SavedGame(id, title, timestamp, initialHoleRow, initialHoleCol, moves))
+                }
+
+                dbCursor.close()
+                sqliteDb.close()
+
+                android.util.Log.d("SolitaireVM", "DB Import: ${importedGames.size} Spiele extrahiert")
+            } catch (e: Exception) {
+                e.printStackTrace()
+                tempFile.delete()
+                return@withContext "Fehler beim Lesen der Import-Datei:\n${e.message}"
+            }
+
+            // Temp-Datei löschen
+            tempFile.delete()
+
+            // Alle importierten Spiele in die aktuelle DB einfügen
+            for (game in importedGames) {
+                repository.saveGame(game)
+            }
+
+            "✓ ${importedGames.size} Spiel(e) aus DB importiert"
+        } catch (e: Exception) {
+            android.util.Log.e("SolitaireVM", "DB Import Fehler", e)
+            e.printStackTrace()
+            "Fehler beim DB-Import:\n${e.message}"
+        }
+    }
+
     suspend fun importDatabaseFromDownloads(filename: String = "r_solitaire_backup.db"): String = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         try {
             val context = getApplication<Application>()
-            val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(
-                android.os.Environment.DIRECTORY_DOWNLOADS
-            )
 
-            // Suche nach neuester DB-Datei wenn kein spezifischer Dateiname angegeben
-            val importFile = if (filename == "r_solitaire_backup.db") {
-                val dbFiles = downloadsDir.listFiles { file ->
-                    file.name.startsWith("r_solitaire_backup_") && file.name.endsWith(".db")
-                }?.sortedByDescending { it.lastModified() }
+            // Suche Datei in mehreren möglichen Download-Ordnern
+            val possibleDirs = mutableListOf<java.io.File>()
 
-                dbFiles?.firstOrNull() ?: java.io.File(downloadsDir, filename)
-            } else {
-                java.io.File(downloadsDir, filename)
+            // Standard Download-Ordner
+            possibleDirs.add(java.io.File("/storage/emulated/0/Download"))
+            possibleDirs.add(java.io.File("/storage/emulated/0/Downloads"))
+
+            // Versuche auch Environment API
+            try {
+                @Suppress("DEPRECATION")
+                val envDownload = android.os.Environment.getExternalStoragePublicDirectory(
+                    android.os.Environment.DIRECTORY_DOWNLOADS
+                )
+                if (envDownload != null) {
+                    possibleDirs.add(envDownload)
+                }
+            } catch (e: Exception) {
+                android.util.Log.d("SolitaireVM", "DB Import: Environment API nicht verfügbar")
             }
 
-            if (!importFile.exists()) {
-                "Fehler: DB-Datei nicht gefunden\n\nErwartet:\n/storage/emulated/0/Download/${importFile.name}"
+            var importFile: java.io.File? = null
+
+            for (dir in possibleDirs) {
+                if (!dir.exists() || !dir.canRead()) continue
+
+                val testFile = java.io.File(dir, filename)
+                android.util.Log.d("SolitaireVM", "DB Import: Prüfe ${testFile.absolutePath}, exists=${testFile.exists()}, canRead=${testFile.canRead()}")
+
+                if (testFile.exists() && testFile.canRead()) {
+                    importFile = testFile
+                    android.util.Log.d("SolitaireVM", "DB Import: Datei gefunden: ${testFile.absolutePath}")
+                    break
+                }
+            }
+
+            if (importFile == null) {
+                "Fehler: DB-Datei nicht gefunden\n\nDatei: ${filename}\n\nBitte im Download-Ordner ablegen."
             } else {
                 // Zuerst alle existierenden Spiele löschen (über Repository, damit Room's Tracker funktioniert)
                 val existingGames = repository.getAllGamesSync()
@@ -528,29 +629,34 @@ class SolitaireViewModel(application: Application) : AndroidViewModel(applicatio
                     repository.deleteGame(game)
                 }
 
-                // Jetzt importierte Spiele laden und einfügen
-                val importedDbFile = importFile
+                // Temporäre Datei erstellen und DB-Inhalt kopieren
+                val tempFile = java.io.File(context.cacheDir, "temp_import.db")
+
+                importFile.copyTo(tempFile, overwrite = true)
+
+                if (!tempFile.exists() || tempFile.length() == 0L) {
+                    return@withContext "Fehler: Konnte DB-Datei nicht in Temp-Datei kopieren"
+                }
 
                 // Temporär die importierte DB öffnen und Spiele extrahieren
-                // (Wir verwenden einen eigenen SQLite-Reader statt Room)
                 val importedGames = mutableListOf<SavedGame>()
 
                 try {
                     val sqliteDb = android.database.sqlite.SQLiteDatabase.openDatabase(
-                        importedDbFile.absolutePath,
+                        tempFile.absolutePath,
                         null,
                         android.database.sqlite.SQLiteDatabase.OPEN_READONLY
                     )
 
-                    val cursor = sqliteDb.rawQuery("SELECT * FROM saved_games ORDER BY timestamp DESC", null)
+                    val dbCursor = sqliteDb.rawQuery("SELECT * FROM saved_games ORDER BY timestamp DESC", null)
 
-                    while (cursor.moveToNext()) {
-                        val id = cursor.getString(cursor.getColumnIndexOrThrow("id"))
-                        val title = cursor.getString(cursor.getColumnIndexOrThrow("title"))
-                        val timestamp = cursor.getLong(cursor.getColumnIndexOrThrow("timestamp"))
-                        val initialHoleRow = cursor.getInt(cursor.getColumnIndexOrThrow("initialHoleRow"))
-                        val initialHoleCol = cursor.getInt(cursor.getColumnIndexOrThrow("initialHoleCol"))
-                        val movesJson = cursor.getString(cursor.getColumnIndexOrThrow("movesJson"))
+                    while (dbCursor.moveToNext()) {
+                        val id = dbCursor.getString(dbCursor.getColumnIndexOrThrow("id"))
+                        val title = dbCursor.getString(dbCursor.getColumnIndexOrThrow("title"))
+                        val timestamp = dbCursor.getLong(dbCursor.getColumnIndexOrThrow("timestamp"))
+                        val initialHoleRow = dbCursor.getInt(dbCursor.getColumnIndexOrThrow("initialHoleRow"))
+                        val initialHoleCol = dbCursor.getInt(dbCursor.getColumnIndexOrThrow("initialHoleCol"))
+                        val movesJson = dbCursor.getString(dbCursor.getColumnIndexOrThrow("movesJson"))
 
                         // Parse moves
                         val movesData = kotlinx.serialization.json.Json.decodeFromString<List<com.rsinkwitz.r_solitaire.data.MoveData>>(movesJson)
@@ -559,21 +665,26 @@ class SolitaireViewModel(application: Application) : AndroidViewModel(applicatio
                         importedGames.add(SavedGame(id, title, timestamp, initialHoleRow, initialHoleCol, moves))
                     }
 
-                    cursor.close()
+                    dbCursor.close()
                     sqliteDb.close()
                 } catch (e: Exception) {
                     e.printStackTrace()
+                    tempFile.delete()
                     return@withContext "Fehler beim Lesen der Import-Datei:\n${e.message}"
                 }
+
+                // Temp-Datei löschen
+                tempFile.delete()
 
                 // Alle importierten Spiele in die aktuelle DB einfügen
                 for (game in importedGames) {
                     repository.saveGame(game)
                 }
 
-                "✓ ${importedGames.size} Spiel(e) aus DB importiert: ${importFile.name}"
+                "✓ ${importedGames.size} Spiel(e) aus DB importiert: ${filename}"
             }
         } catch (e: Exception) {
+            android.util.Log.e("SolitaireVM", "DB Import Fehler", e)
             e.printStackTrace()
             "Fehler beim DB-Import:\n${e.message}"
         }
@@ -608,30 +719,68 @@ class SolitaireViewModel(application: Application) : AndroidViewModel(applicatio
     fun getAvailableYamlFiles(): List<String> {
         return try {
             val context = getApplication<Application>()
-
-            // Suche in mehreren möglichen Download-Ordnern
-            val possibleDirs = listOf(
-                android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS),
-                java.io.File(android.os.Environment.getExternalStorageDirectory(), "Download"),
-                context.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS)
-            )
-
             val allFiles = mutableSetOf<String>()
 
-            for (dir in possibleDirs) {
-                if (dir == null || !dir.exists()) continue
+            android.util.Log.d("SolitaireVM", "YAML: Starte Suche in Download-Ordnern")
 
-                val yamlFiles = dir.listFiles { file ->
-                    file.name.startsWith("r_solitaire_games") && file.name.endsWith(".yaml")
+            // Mehrere mögliche Download-Ordner durchsuchen
+            val possibleDirs = mutableListOf<java.io.File>()
+
+            // Standard Download-Ordner
+            possibleDirs.add(java.io.File("/storage/emulated/0/Download"))
+            possibleDirs.add(java.io.File("/storage/emulated/0/Downloads"))
+
+            // Versuche auch Environment API (funktioniert auf älteren Android-Versionen)
+            try {
+                @Suppress("DEPRECATION")
+                val envDownload = android.os.Environment.getExternalStoragePublicDirectory(
+                    android.os.Environment.DIRECTORY_DOWNLOADS
+                )
+                if (envDownload != null) {
+                    possibleDirs.add(envDownload)
+                }
+            } catch (e: Exception) {
+                android.util.Log.d("SolitaireVM", "YAML: Environment API nicht verfügbar: ${e.message}")
+            }
+
+            for (dir in possibleDirs) {
+                if (!dir.exists()) {
+                    android.util.Log.d("SolitaireVM", "YAML: Ordner existiert nicht: ${dir.absolutePath}")
+                    continue
                 }
 
-                yamlFiles?.forEach { file ->
+                if (!dir.canRead()) {
+                    android.util.Log.d("SolitaireVM", "YAML: Keine Leseberechtigung: ${dir.absolutePath}")
+                    continue
+                }
+
+                android.util.Log.d("SolitaireVM", "YAML: Durchsuche: ${dir.absolutePath}")
+
+                val files = try {
+                    dir.listFiles { file ->
+                        file.isFile &&
+                        file.name.startsWith("r_solitaire_games") &&
+                        file.name.endsWith(".yaml")
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("SolitaireVM", "YAML: Fehler beim Lesen von ${dir.absolutePath}", e)
+                    null
+                }
+
+                files?.forEach { file ->
+                    android.util.Log.d("SolitaireVM", "YAML: ✓ Gefunden: ${file.name} (${file.length()} bytes)")
                     allFiles.add(file.name)
                 }
             }
 
+            android.util.Log.d("SolitaireVM", "YAML: ===== ERGEBNIS: ${allFiles.size} passende Dateien gefunden =====")
+            allFiles.forEach { filename ->
+                android.util.Log.d("SolitaireVM", "YAML: - $filename")
+            }
+
             allFiles.sortedByDescending { it }
         } catch (e: Exception) {
+            android.util.Log.e("SolitaireVM", "YAML: Fehler beim Suchen", e)
             e.printStackTrace()
             emptyList()
         }
@@ -640,30 +789,68 @@ class SolitaireViewModel(application: Application) : AndroidViewModel(applicatio
     fun getAvailableDbFiles(): List<String> {
         return try {
             val context = getApplication<Application>()
-
-            // Suche in mehreren möglichen Download-Ordnern
-            val possibleDirs = listOf(
-                android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS),
-                java.io.File(android.os.Environment.getExternalStorageDirectory(), "Download"),
-                context.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS)
-            )
-
             val allFiles = mutableSetOf<String>()
 
-            for (dir in possibleDirs) {
-                if (dir == null || !dir.exists()) continue
+            android.util.Log.d("SolitaireVM", "DB: Starte Suche in Download-Ordnern")
 
-                val dbFiles = dir.listFiles { file ->
-                    file.name.startsWith("r_solitaire_backup") && file.name.endsWith(".db")
+            // Mehrere mögliche Download-Ordner durchsuchen
+            val possibleDirs = mutableListOf<java.io.File>()
+
+            // Standard Download-Ordner
+            possibleDirs.add(java.io.File("/storage/emulated/0/Download"))
+            possibleDirs.add(java.io.File("/storage/emulated/0/Downloads"))
+
+            // Versuche auch Environment API (funktioniert auf älteren Android-Versionen)
+            try {
+                @Suppress("DEPRECATION")
+                val envDownload = android.os.Environment.getExternalStoragePublicDirectory(
+                    android.os.Environment.DIRECTORY_DOWNLOADS
+                )
+                if (envDownload != null) {
+                    possibleDirs.add(envDownload)
+                }
+            } catch (e: Exception) {
+                android.util.Log.d("SolitaireVM", "DB: Environment API nicht verfügbar: ${e.message}")
+            }
+
+            for (dir in possibleDirs) {
+                if (!dir.exists()) {
+                    android.util.Log.d("SolitaireVM", "DB: Ordner existiert nicht: ${dir.absolutePath}")
+                    continue
                 }
 
-                dbFiles?.forEach { file ->
+                if (!dir.canRead()) {
+                    android.util.Log.d("SolitaireVM", "DB: Keine Leseberechtigung: ${dir.absolutePath}")
+                    continue
+                }
+
+                android.util.Log.d("SolitaireVM", "DB: Durchsuche: ${dir.absolutePath}")
+
+                val files = try {
+                    dir.listFiles { file ->
+                        file.isFile &&
+                        file.name.startsWith("r_solitaire_backup") &&
+                        file.name.endsWith(".db")
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("SolitaireVM", "DB: Fehler beim Lesen von ${dir.absolutePath}", e)
+                    null
+                }
+
+                files?.forEach { file ->
+                    android.util.Log.d("SolitaireVM", "DB: ✓ Gefunden: ${file.name} (${file.length()} bytes)")
                     allFiles.add(file.name)
                 }
             }
 
+            android.util.Log.d("SolitaireVM", "DB: ===== ERGEBNIS: ${allFiles.size} passende Dateien gefunden =====")
+            allFiles.forEach { filename ->
+                android.util.Log.d("SolitaireVM", "DB: - $filename")
+            }
+
             allFiles.sortedByDescending { it }
         } catch (e: Exception) {
+            android.util.Log.e("SolitaireVM", "DB: Fehler beim Suchen", e)
             e.printStackTrace()
             emptyList()
         }
@@ -729,45 +916,103 @@ class SolitaireViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    suspend fun importGamesFromYamlUri(uri: android.net.Uri): String = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        try {
+            val context = getApplication<Application>()
+
+            // Lese Datei über ContentResolver (funktioniert mit SAF)
+            val yaml = context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                inputStream.bufferedReader().readText()
+            } ?: return@withContext "Fehler: Datei konnte nicht gelesen werden"
+
+            android.util.Log.d("SolitaireVM", "YAML Import via URI: ${uri.path}, Länge: ${yaml.length}")
+
+            val importedGames = com.rsinkwitz.r_solitaire.util.YamlExporter.importFromYaml(yaml)
+
+            if (importedGames.isEmpty()) {
+                "Fehler: Keine Spiele in YAML gefunden\nBitte Format prüfen"
+            } else {
+                // Hole bestehende Titel
+                val existingGames = repository.getAllGamesSync()
+                val existingTitles = existingGames.map { it.title }.toSet()
+
+                // Speichere importierte Spiele mit eindeutigen Titeln
+                for (game in importedGames) {
+                    var uniqueTitle = game.title
+                    var suffix = 1
+
+                    // Bei Konflikt: Anhänge -01, -02, etc.
+                    while (existingTitles.contains(uniqueTitle)) {
+                        uniqueTitle = "${game.title}-${String.format(java.util.Locale.US, "%02d", suffix)}"
+                        suffix++
+                    }
+
+                    val gameToSave = if (uniqueTitle != game.title) {
+                        game.copy(
+                            id = java.util.UUID.randomUUID().toString(),
+                            title = uniqueTitle
+                        )
+                    } else {
+                        game.copy(id = java.util.UUID.randomUUID().toString())
+                    }
+
+                    repository.saveGame(gameToSave)
+                }
+
+                "YAML Import erfolgreich!\n\n${importedGames.size} Spiel(e) importiert\n\nSpiele wurden angehängt."
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("SolitaireVM", "YAML Import Fehler", e)
+            e.printStackTrace()
+            "Fehler beim YAML-Import:\n${e.message}"
+        }
+    }
+
     suspend fun importGamesFromYaml(filename: String = "r_solitaire_games.yaml"): String = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         try {
             val context = getApplication<Application>()
 
             // Suche Datei in mehreren möglichen Download-Ordnern
-            val possibleDirs = listOf(
-                android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS),
-                java.io.File(android.os.Environment.getExternalStorageDirectory(), "Download"),
-                context.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS)
-            )
+            val possibleDirs = mutableListOf<java.io.File>()
+
+            // Standard Download-Ordner
+            possibleDirs.add(java.io.File("/storage/emulated/0/Download"))
+            possibleDirs.add(java.io.File("/storage/emulated/0/Downloads"))
+
+            // Versuche auch Environment API
+            try {
+                @Suppress("DEPRECATION")
+                val envDownload = android.os.Environment.getExternalStoragePublicDirectory(
+                    android.os.Environment.DIRECTORY_DOWNLOADS
+                )
+                if (envDownload != null) {
+                    possibleDirs.add(envDownload)
+                }
+            } catch (e: Exception) {
+                android.util.Log.d("SolitaireVM", "YAML Import: Environment API nicht verfügbar")
+            }
 
             var importFile: java.io.File? = null
 
             for (dir in possibleDirs) {
-                if (dir == null || !dir.exists()) continue
+                if (!dir.exists() || !dir.canRead()) continue
 
                 val testFile = java.io.File(dir, filename)
-                if (testFile.exists()) {
+                android.util.Log.d("SolitaireVM", "YAML Import: Prüfe ${testFile.absolutePath}, exists=${testFile.exists()}, canRead=${testFile.canRead()}")
+
+                if (testFile.exists() && testFile.canRead()) {
                     importFile = testFile
+                    android.util.Log.d("SolitaireVM", "YAML Import: Datei gefunden: ${testFile.absolutePath}")
                     break
-                }
-
-                // Falls kein spezifischer Name: Suche neueste Datei
-                if (filename == "r_solitaire_games.yaml") {
-                    val yamlFiles = dir.listFiles { file ->
-                        file.name.startsWith("r_solitaire_games_") && file.name.endsWith(".yaml")
-                    }?.sortedByDescending { it.lastModified() }
-
-                    if (yamlFiles?.isNotEmpty() == true) {
-                        importFile = yamlFiles.first()
-                        break
-                    }
                 }
             }
 
-            if (importFile == null || !importFile.exists()) {
-                "Fehler: YAML-Datei nicht gefunden\n\nDatei: ${filename}\n\nGesucht in allen Download-Ordnern."
+            if (importFile == null) {
+                "Fehler: YAML-Datei nicht gefunden\n\nDatei: ${filename}\n\nBitte im Download-Ordner ablegen."
             } else {
+                // Lese Datei direkt
                 val yaml = importFile.readText()
+
                 val importedGames = com.rsinkwitz.r_solitaire.util.YamlExporter.importFromYaml(yaml)
 
                 if (importedGames.isEmpty()) {
@@ -784,7 +1029,7 @@ class SolitaireViewModel(application: Application) : AndroidViewModel(applicatio
 
                         // Bei Konflikt: Anhänge -01, -02, etc.
                         while (existingTitles.contains(uniqueTitle)) {
-                            uniqueTitle = "${game.title}-${String.format("%02d", suffix)}"
+                            uniqueTitle = "${game.title}-${String.format(java.util.Locale.US, "%02d", suffix)}"
                             suffix++
                         }
 
@@ -800,10 +1045,11 @@ class SolitaireViewModel(application: Application) : AndroidViewModel(applicatio
                         repository.saveGame(gameToSave)
                     }
 
-                    "YAML Import erfolgreich!\n\n${importedGames.size} Spiel(e) importiert\n\nDatei:\n${importFile.name}\n\nSpiele wurden angehängt."
+                    "YAML Import erfolgreich!\n\n${importedGames.size} Spiel(e) importiert\n\nDatei:\n${filename}\n\nSpiele wurden angehängt."
                 }
             }
         } catch (e: Exception) {
+            android.util.Log.e("SolitaireVM", "YAML Import Fehler", e)
             e.printStackTrace()
             "Fehler beim YAML-Import:\n${e.message}"
         }

@@ -21,21 +21,42 @@ fun LoadGameDialog(
     onReplay: (SavedGame) -> Unit,
     onDelete: (SavedGame) -> Unit,
     onExportYaml: () -> Unit,
-    onImportYaml: (String) -> Unit,
+    onImportYaml: (android.net.Uri) -> Unit,  // Geändert: Uri statt String
     onExportDb: () -> Unit,
-    onImportDb: (String) -> Unit,
+    onImportDb: (android.net.Uri) -> Unit,  // Geändert: Uri statt String
     onDeleteAll: () -> Unit,
     availableYamlFiles: List<String>,
     availableDbFiles: List<String>
 ) {
     var gameToDelete by remember { mutableStateOf<SavedGame?>(null) }
     var showDeleteAllConfirm by remember { mutableStateOf(false) }
-    var showYamlFilePicker by remember { mutableStateOf(false) }
-    var showDbFilePicker by remember { mutableStateOf(false) }
+
+    // SAF File Picker für YAML Import mit OpenDocument für bessere Filterung
+    val yamlPickerLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri: android.net.Uri? ->
+        uri?.let { onImportYaml(it) }
+    }
+
+    // SAF File Picker für DB Import mit OpenDocument für bessere Filterung
+    val dbPickerLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri: android.net.Uri? ->
+        uri?.let { onImportDb(it) }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Gespeicherte Spiele") },
+        title = {
+            Column {
+                Text("Gespeicherte Spiele")
+                Text(
+                    "Tipp: YAML für Daten, DB für komplette Sicherung",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
         text = {
             Column(
                 modifier = Modifier.fillMaxWidth()
@@ -50,21 +71,48 @@ fun LoadGameDialog(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Button(
-                            onClick = onExportYaml,
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Default.FileDownload, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("YAML Export", style = MaterialTheme.typography.labelSmall)
+                        Column(modifier = Modifier.weight(1f)) {
+                            Button(
+                                onClick = onExportYaml,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.FileDownload, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("YAML Export", style = MaterialTheme.typography.labelSmall)
+                            }
+                            Text(
+                                "→ Download/*.yaml",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 4.dp, top = 2.dp)
+                            )
                         }
-                        Button(
-                            onClick = { showYamlFilePicker = true },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Default.FileUpload, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("YAML Import", style = MaterialTheme.typography.labelSmall)
+                        Column(modifier = Modifier.weight(1f)) {
+                            Button(
+                                onClick = {
+                                    yamlPickerLauncher.launch(
+                                        arrayOf(
+                                            "text/plain",           // .txt, .yaml oft als plain text erkannt
+                                            "text/yaml",            // offizieller YAML MIME-Type
+                                            "text/x-yaml",          // alternative YAML MIME-Type
+                                            "application/x-yaml",   // weitere alternative
+                                            "application/yaml",     // weitere alternative
+                                            "*/*"                   // Fallback für alle Dateien
+                                        )
+                                    )
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.FileUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("YAML Import", style = MaterialTheme.typography.labelSmall)
+                            }
+                            Text(
+                                "← *.yaml Datei",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 4.dp, top = 2.dp)
+                            )
                         }
                     }
 
@@ -73,27 +121,53 @@ fun LoadGameDialog(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Button(
-                            onClick = onExportDb,
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.tertiary
+                        Column(modifier = Modifier.weight(1f)) {
+                            Button(
+                                onClick = onExportDb,
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.tertiary
+                                )
+                            ) {
+                                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("DB Export", style = MaterialTheme.typography.labelSmall)
+                            }
+                            Text(
+                                "→ Download/*.db",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 4.dp, top = 2.dp)
                             )
-                        ) {
-                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("DB Export", style = MaterialTheme.typography.labelSmall)
                         }
-                        Button(
-                            onClick = { showDbFilePicker = true },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.tertiary
+                        Column(modifier = Modifier.weight(1f)) {
+                            Button(
+                                onClick = {
+                                    dbPickerLauncher.launch(
+                                        arrayOf(
+                                            "application/vnd.sqlite3",      // offizieller SQLite MIME-Type
+                                            "application/x-sqlite3",        // alternative SQLite MIME-Type
+                                            "application/octet-stream",     // binäre Dateien
+                                            "application/x-db",             // .db Dateien
+                                            "*/*"                           // Fallback für alle Dateien
+                                        )
+                                    )
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.tertiary
+                                )
+                            ) {
+                                Icon(Icons.Default.Upload, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("DB Import", style = MaterialTheme.typography.labelSmall)
+                            }
+                            Text(
+                                "← *.db Datei",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 4.dp, top = 2.dp)
                             )
-                        ) {
-                            Icon(Icons.Default.Upload, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("DB Import", style = MaterialTheme.typography.labelSmall)
                         }
                     }
 
@@ -199,121 +273,8 @@ fun LoadGameDialog(
             }
         )
     }
-
-    // YAML File Picker
-    if (showYamlFilePicker) {
-        AlertDialog(
-            onDismissRequest = { showYamlFilePicker = false },
-            title = { Text("YAML Import - Datei auswählen") },
-            text = {
-                Column(
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    if (availableYamlFiles.isEmpty()) {
-                        Text("Keine YAML-Dateien im Download-Ordner gefunden.")
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            "Erwartet: r_solitaire_games_*.yaml",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    } else {
-                        Text("${availableYamlFiles.size} Datei(en) gefunden:")
-                        Spacer(Modifier.height(8.dp))
-                        LazyColumn(
-                            modifier = Modifier.height(200.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            items(availableYamlFiles) { filename ->
-                                Button(
-                                    onClick = {
-                                        onImportYaml(filename)
-                                        showYamlFilePicker = false
-                                    },
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Text(
-                                        text = filename,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        maxLines = 2
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = { showYamlFilePicker = false }) {
-                    Text("Abbrechen")
-                }
-            }
-        )
-    }
-
-    // DB File Picker
-    if (showDbFilePicker) {
-        AlertDialog(
-            onDismissRequest = { showDbFilePicker = false },
-            title = { Text("DB Import - Datei auswählen") },
-            text = {
-                Column(
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        "⚠️ WARNUNG: DB Import ERSETZT alle aktuellen Spiele!",
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Spacer(Modifier.height(12.dp))
-
-                    if (availableDbFiles.isEmpty()) {
-                        Text("Keine DB-Dateien im Download-Ordner gefunden.")
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            "Erwartet: r_solitaire_backup_*.db",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    } else {
-                        Text("${availableDbFiles.size} Datei(en) gefunden:")
-                        Spacer(Modifier.height(8.dp))
-                        LazyColumn(
-                            modifier = Modifier.height(200.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            items(availableDbFiles) { filename ->
-                                Button(
-                                    onClick = {
-                                        onImportDb(filename)
-                                        showDbFilePicker = false
-                                    },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = MaterialTheme.colorScheme.error
-                                    )
-                                ) {
-                                    Text(
-                                        text = filename,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        maxLines = 2
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = { showDbFilePicker = false }) {
-                    Text("Abbrechen")
-                }
-            }
-        )
-    }
 }
+
 
 @Composable
 fun SavedGameItem(

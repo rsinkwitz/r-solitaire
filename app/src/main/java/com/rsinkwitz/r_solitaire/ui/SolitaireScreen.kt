@@ -256,9 +256,9 @@ fun SolitaireScreen(
                     availableYamlFiles = viewModel.getAvailableYamlFiles()
                 }
             },
-            onImportYaml = { filename ->
+            onImportYaml = { uri ->
                 coroutineScope.launch {
-                    val result = viewModel.importGamesFromYaml(filename)
+                    val result = viewModel.importGamesFromYamlUri(uri)
                     saveSuccessMessage = result
                 }
             },
@@ -268,9 +268,9 @@ fun SolitaireScreen(
                 // Liste der verfügbaren DB-Dateien aktualisieren
                 availableDbFiles = viewModel.getAvailableDbFiles()
             },
-            onImportDb = { filename ->
+            onImportDb = { uri ->
                 coroutineScope.launch {
-                    val result = viewModel.importDatabaseFromDownloads(filename)
+                    val result = viewModel.importDatabaseFromUri(uri)
                     saveSuccessMessage = result
                 }
             },
