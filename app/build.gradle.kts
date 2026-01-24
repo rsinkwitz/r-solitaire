@@ -1,9 +1,19 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     id("com.google.devtools.ksp") version "2.0.21-1.0.28"
     kotlin("plugin.serialization") version "2.0.21"
+}
+
+// Keystore-Properties laden
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.exists()) {
+        load(keystorePropertiesFile.inputStream())
+    }
 }
 
 android {
@@ -27,10 +37,10 @@ android {
 
     signingConfigs {
         create("release") {
-            storeFile = file("D:/Users/Rainer/Documents/0-Rainer/Setup/rsinkwitz-release-key.jks")
-            storePassword = "geheim"
-            keyAlias = "androidsign"
-            keyPassword = "geheim"
+            storeFile = file(keystoreProperties["RELEASE_STORE_FILE"] as String)
+            storePassword = keystoreProperties["RELEASE_STORE_PASSWORD"] as String
+            keyAlias = keystoreProperties["RELEASE_KEY_ALIAS"] as String
+            keyPassword = keystoreProperties["RELEASE_KEY_PASSWORD"] as String
         }
     }
 
